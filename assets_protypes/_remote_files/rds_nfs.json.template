@@ -1,0 +1,17 @@
+{
+  "rds" : {
+    "database" : "wordpress",
+    "username" : "amimoto",
+    "password" : "{{password}}",
+    "endpoint" : "{{endpoint}}",
+    "port"     : 3306
+  },
+  "nfs" : {
+    "server" : {
+      "instance-id" : "{{serverid}}"
+    },
+    "client" : {
+      "mountoption" : "rw,tcp"
+    }
+  }
+}
