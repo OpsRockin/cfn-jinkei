@@ -38,4 +38,5 @@ build/
 .rvmrc
 
 
-/b_bin/
+/.envrc
+/.direnv/
