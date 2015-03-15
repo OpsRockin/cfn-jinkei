@@ -1,0 +1,215 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Parameters" : {
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "String",
+      "MinLength" : "1",
+      "MaxLength" : "64",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    },
+    "MySQLPassword" : {
+      "Description" : "Password of RDS User",
+      "Type" : "String",
+      "MinLength" : "8",
+      "MaxLength" : "64"
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "m1.small",
+      "AllowedValues" : [ "t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "RDSInstanceType" : {
+      "Description" : "RDS instance type",
+      "Type" : "String",
+      "Default" : "db.m1.small",
+      "AllowedValues" : [ "db.t1.micro","db.m1.small","db.m1.medium","db.m1.large","db.m1.xlarge","db.m2.xlarge","db.m2.2xlarge","db.m2.4xlarge","db.cr1.8xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "DBAllocatedStorage": {
+      "Default": "20",
+      "Description" : "The size of the database (Gb)",
+      "Type": "Number",
+      "MinValue": "5",
+      "MaxValue": "3072",
+      "ConstraintDescription" : "must be between 5 and 3072Gb."
+    },
+    "MultiAZDatabase": {
+      "Default": "true",
+      "Description" : "Create a multi-AZ MySQL Amazon RDS database instance",
+      "Type": "String",
+      "AllowedValues" : [ "true", "false" ],
+      "ConstraintDescription" : "must be either true or false."
+    }
+  },
+  "Mappings" : {
+    "MPAmimotov4" : {
+      "us-east-1":      { "AMI":"ami-4459952c", "Location":"Virginia" },
+      "us-west-2":      { "AMI":"ami-b9fd8489", "Location":"Oregon" },
+      "us-west-1":      { "AMI":"ami-316d6e74", "Location":"N.California" },
+      "eu-west-1":      { "AMI":"ami-8dd204fa", "Location":"EU_Ireland" },
+      "ap-southeast-1": { "AMI":"ami-e0adf4b2", "Location":"Singapore" },
+      "ap-southeast-2": { "AMI":"ami-4799fe7d", "Location":"Sydney" },
+      "ap-northeast-1": { "AMI":"ami-1f481b1e", "Location":"Tokyo" },
+      "sa-east-1":      { "AMI":"ami-9718b68a", "Location":"Sao_Paul" }
+    }
+  },
+  "Resources": {
+    "LoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "AvailabilityZones": [
+          { "Fn::GetAtt" : [ "AmimotoWithRDS", "AvailabilityZone" ]}
+        ],
+        "HealthCheck": {
+          "HealthyThreshold": "2",
+          "Interval": "30",
+          "Target": "TCP:80",
+          "Timeout": "10",
+          "UnhealthyThreshold": "2"
+        },
+        "Instances": [
+          {
+            "Ref": "AmimotoWithRDS"
+          }
+        ],
+        "Listeners": [
+          {
+            "InstancePort": "80",
+            "LoadBalancerPort": "80",
+            "Protocol": "HTTP",
+            "InstanceProtocol": "HTTP"
+          },
+          {
+            "InstancePort": "443",
+            "LoadBalancerPort": "443",
+            "Protocol": "TCP",
+            "InstanceProtocol": "TCP"
+          }
+        ]
+      }
+    },
+    "AmimotoWithRDS": {
+      "Type": "AWS::EC2::Instance",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "files" : {
+              "/opt/aws/cloud_formation.json" : {
+                "source" : "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds.json.template",
+                "context" : {
+                  "endpoint" : { "Fn::GetAtt" : [ "AmimotoRDS" , "Endpoint.Address"] },
+                  "password" : { "Ref" : "MySQLPassword" }
+                },
+                "mode" : "00644",
+                "owner" : "root",
+                "group" : "root"
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "DisableApiTermination": "FALSE",
+        "ImageId" : { "Fn::FindInMap" : [ "MPAmimotov4", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "InstanceType": { "Ref" : "InstanceType" },
+        "KeyName" : { "Ref" : "KeyName" },
+        "SecurityGroupIds" : [
+          { "Ref" : "sgAMIMOTO11AutogenByAWSMP" }
+        ],
+        "Monitoring": "false",
+        "UserData": { "Fn::Base64" : {
+          "Fn::Join" : [ 
+              "",
+              [
+                "#!/bin/bash\n",
+                "/opt/aws/bin/cfn-init -s ", { "Ref" : "AWS::StackName" },
+                " -r AmimotoWithRDS ",
+                " --region ", { "Ref" : "AWS::Region" }, "\n"
+              ]
+            ]
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "mp-amimoto"
+          }
+        ]
+      }
+    },
+    "AmimotoRDS": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "AutoMinorVersionUpgrade": "true",
+        "DBInstanceClass": { "Ref" : "RDSInstanceType" },
+        "Port": "3306",
+        "AllocatedStorage": { "Ref" : "DBAllocatedStorage" },
+        "BackupRetentionPeriod": "1",
+        "DBName": "wordpress",
+        "Engine": "mysql",
+        "MultiAZ"           : { "Ref": "MultiAZDatabase" },
+        "MasterUsername": "amimoto",
+        "MasterUserPassword": { "Ref" : "MySQLPassword" },
+        "PreferredBackupWindow": "00:00-00:30",
+        "PreferredMaintenanceWindow": "sun:16:00-sun:17:30",
+        "DBSecurityGroups": [
+          {
+            "Ref": "sgAMIMOTO11AutogenByAWSMPforRDB"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "workload-type",
+            "Value": "other"
+          }
+        ]
+      }
+    },
+    "sgAMIMOTO11AutogenByAWSMP": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "This security group was generated by AWS Marketplace and is based on recommended settings for AMIMOTO version 11 provided by DigitalCube Co Ltd",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "80",
+            "ToPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "sgAMIMOTO11AutogenByAWSMPforRDB": {
+      "Type": "AWS::RDS::DBSecurityGroup",
+      "Properties": {
+        "GroupDescription": "This security group was generated by AWS Marketplace and is based on recommended settings for AMIMOTO JINKEI version 11 provided by DigitalCube Co Ltd",
+        "DBSecurityGroupIngress": [
+          {
+            "EC2SecurityGroupName": { "Ref" : "sgAMIMOTO11AutogenByAWSMP" }
+          }
+        ]
+      }
+    }
+  },
+  "Description": "",
+  "Outputs" : {
+    "WebSiteURL" : {
+      "Description": "WordPress Site URL (Please wait a few minutes for the upgrade of WordPress to access for the first time.)",
+      "Value" : { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [ "LoadBalancer", "DNSName" ]}]]}
+    },
+    "RDSEndpoint" : {
+      "Description": "Endpoint of RDS",
+      "Value" : { "Fn::GetAtt" : [ "AmimotoRDS" , "Endpoint.Address"] }
+    }
+  }
+}
