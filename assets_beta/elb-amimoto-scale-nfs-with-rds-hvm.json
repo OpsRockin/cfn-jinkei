@@ -16,16 +16,13 @@
       "MaxLength": "64"
     },
     "InstanceType": {
-      "Description": "EC2 instance type",
+      "Description": "Front EC2 instance type",
       "Type": "String",
       "Default": "t2.small",
       "AllowedValues": [
         "t2.micro",
         "t2.small",
         "t2.medium",
-        "hi1.4xlarge",
-        "hs1.8xlarge",
-        "g2.2xlarge",
         "m3.medium",
         "m3.large",
         "m3.xlarge",
@@ -39,6 +36,11 @@
         "c3.2xlarge",
         "c3.4xlarge",
         "c3.8xlarge",
+        "c4.large",
+        "c4.xlarge",
+        "c4.2xlarge",
+        "c4.4xlarge",
+        "c4.8xlarge",
         "r3.large",
         "r3.xlarge",
         "r3.2xlarge",
@@ -161,43 +163,55 @@
         "AMI": "ami-63de6e7e",
         "Location": "Sao_Paul"
       }
-    },
-    "AZs": {
-      "us-east-1": {
-        "PRI": "us-east-1d",
-        "SEC": "us-east-1c"
-      },
-      "us-west-2": {
-        "PRI": "us-west-2c",
-        "SEC": "us-west-2b"
-      },
-      "us-west-1": {
-        "PRI": "us-west-1c",
-        "SEC": "us-west-1b"
-      },
-      "eu-west-1": {
-        "PRI": "eu-west-1c",
-        "SEC": "eu-west-1b"
-      },
-      "ap-southeast-1": {
-        "PRI": "ap-southeast-1b",
-        "SEC": "ap-southeast-1a"
-      },
-      "ap-northeast-1": {
-        "PRI": "ap-northeast-1c",
-        "SEC": "ap-northeast-1a"
-      },
-      "ap-southeast-2": {
-        "PRI": "ap-southeast-2b",
-        "SEC": "ap-southeast-2a"
-      },
-      "sa-east-1": {
-        "PRI": "sa-east-1b",
-        "SEC": "sa-east-1a"
-      }
     }
   },
   "Resources": {
+    "AmimotoFrontRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "AmazonEC2ReadOnlyAccess",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "ec2:Describe*",
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AmimotoFrontRoleInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "AmimotoFrontRole"
+          }
+        ]
+      }
+    },
     "AmimotoVPC": {
       "Type": "AWS::EC2::VPC",
       "Properties": {
@@ -260,7 +274,7 @@
         ]
       }
     },
-    "AmimotoWithRDSSubnet": {
+    "AmimotoWithRDSNFSSubnet": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
         "VpcId": {
@@ -406,11 +420,11 @@
         }
       }
     },
-    "SubnetRouteTableAssociation": {
+    "SubnetRouteTableAssociationNFS": {
       "Type": "AWS::EC2::SubnetRouteTableAssociation",
       "Properties": {
         "SubnetId": {
-          "Ref": "AmimotoWithRDSSubnet"
+          "Ref": "AmimotoWithRDSNFSSubnet"
         },
         "RouteTableId": {
           "Ref": "AmimotoRouteTable"
@@ -457,14 +471,138 @@
         ]
       }
     },
-    "AmimotoWithRDS": {
+    "AmimotoFrontSG": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": {
+          "Fn::GetAZs": {
+            "Ref": "AWS::Region"
+          }
+        },
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "AmimotoFrontSubnet1"
+          },
+          {
+            "Ref": "AmimotoFrontSubnet2"
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "AmimotoFrontLC"
+        },
+        "LoadBalancerNames": [
+          {
+            "Ref": "LoadBalancer"
+          }
+        ],
+        "HealthCheckGracePeriod": "300",
+        "MaxSize": "10",
+        "MinSize": "3",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "mp-amimoto-ac-front",
+            "PropagateAtLaunch": "true"
+          }
+        ]
+      }
+    },
+    "AmimotoFrontSP": {
+      "Type": "AWS::AutoScaling::ScalingPolicy",
+      "Properties": {
+        "AdjustmentType": "ChangeInCapacity",
+        "AutoScalingGroupName": {
+          "Ref": "AmimotoFrontSG"
+        },
+        "Cooldown": "180",
+        "ScalingAdjustment": "1"
+      }
+    },
+    "AmimotoFrontLC": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata": {
+        "AWS::CloudFormation::Init": {
+          "config": {
+            "files": {
+              "/opt/aws/cloud_formation.json": {
+                "source": "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds_nfs.json.template",
+                "context": {
+                  "endpoint": {
+                    "Fn::GetAtt": [
+                      "AmimotoRDS",
+                      "Endpoint.Address"
+                    ]
+                  },
+                  "password": {
+                    "Ref": "MySQLPassword"
+                  },
+                  "serverid": {
+                    "Ref": "AmimotoWithRDSNFS"
+                  }
+                },
+                "mode": "00644",
+                "owner": "root",
+                "group": "root"
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "AssociatePublicIpAddress": "true",
+        "ImageId": {
+          "Fn::FindInMap": [
+            "MPAmimotov4",
+            {
+              "Ref": "AWS::Region"
+            },
+            "AMI"
+          ]
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "IamInstanceProfile": {
+          "Ref": "AmimotoFrontRoleInstanceProfile"
+        },
+        "KeyName": {
+          "Ref": "KeyName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "sgAMIMOTO11AutogenByAWSMP"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash\n",
+                "/opt/aws/bin/cfn-init -s ",
+                {
+                  "Ref": "AWS::StackName"
+                },
+                " -r AmimotoFrontLC ",
+                " --region ",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "AmimotoWithRDSNFS": {
       "Type": "AWS::EC2::Instance",
       "Metadata": {
         "AWS::CloudFormation::Init": {
           "config": {
             "files": {
               "/opt/aws/cloud_formation.json": {
-                "source": "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds.json.template",
+                "source": "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds_nfs.json.template",
                 "context": {
                   "endpoint": {
                     "Fn::GetAtt": [
@@ -508,11 +646,11 @@
             "DeviceIndex": "0",
             "AssociatePublicIpAddress": "true",
             "SubnetId": {
-              "Ref": "AmimotoWithRDSSubnet"
+              "Ref": "AmimotoWithRDSNFSSubnet"
             },
             "GroupSet": [
               {
-                "Ref": "sgAMIMOTO11AutogenByAWSMP"
+                "Ref": "sgAMIMOTO11AutogenByAWSMPNFS"
               }
             ]
           }
@@ -644,6 +782,45 @@
         ]
       }
     },
+    "sgAMIMOTO11AutogenByAWSMPNFS": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "This security group was generated by AWS Marketplace and is based on recommended settings for AMIMOTO version 11 provided by DigitalCube Co Ltd",
+        "VpcId": {
+          "Ref": "AmimotoVPC"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "80",
+            "ToPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "0",
+            "ToPort": "65535",
+            "SourceSecurityGroupId": {
+              "Ref": "sgAMIMOTO11AutogenByAWSMP"
+            }
+          },
+          {
+            "IpProtocol": "udp",
+            "FromPort": "0",
+            "ToPort": "65535",
+            "SourceSecurityGroupId": {
+              "Ref": "sgAMIMOTO11AutogenByAWSMP"
+            }
+          }
+        ]
+      }
+    },
     "sgAMIMOTO11AutogenByAWSMPforRDB": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
@@ -665,7 +842,7 @@
             "FromPort": "3306",
             "ToPort": "3306",
             "SourceSecurityGroupId": {
-              "Ref": "sgAMIMOTO11AutogenByAWSMP"
+              "Ref": "sgAMIMOTO11AutogenByAWSMPNFS"
             }
           }
         ]
@@ -698,6 +875,12 @@
           "AmimotoRDS",
           "Endpoint.Address"
         ]
+      }
+    },
+    "InstanceIDforConfirmation": {
+      "Description": "Instance ID for confirmation.",
+      "Value": {
+        "Ref": "AmimotoWithRDSNFS"
       }
     }
   }

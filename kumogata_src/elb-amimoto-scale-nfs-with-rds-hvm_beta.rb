@@ -1,13 +1,26 @@
 AWSTemplateFormatVersion "2010-09-09"
 Parameters do
-  _include 'include/params_keypair.rb'
+  KeyName do
+    Description "Name of an existing EC2 KeyPair to enable SSH access to the instances"
+    Type "String"
+    MinLength 1
+    MaxLength 64
+    AllowedPattern "[-_ a-zA-Z0-9]*"
+    ConstraintDescription "can contain only alphanumeric characters, spaces, dashes and underscores."
+  end
   MySQLPassword do
     Description "Password of RDS User"
     Type "String"
     MinLength 8
     MaxLength 64
   end
-  _include 'include/params_instancetype_hvm.rb'
+  InstanceType do
+    Description "Front EC2 instance type"
+    Type "String"
+    Default "t2.small"
+    AllowedValues "t2.micro", "t2.small", "t2.medium", "m3.medium", "m3.large", "m3.xlarge", "m3.2xlarge", "i2.xlarge", "i2.2xlarge", "i2.4xlarge", "i2.8xlarge", "c3.large", "c3.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge", "c4.large", "c4.xlarge", "c4.2xlarge", "c4.4xlarge", "c4.8xlarge", "r3.large", "r3.xlarge", "r3.2xlarge", "r3.4xlarge", "r3.8xlarge"
+    ConstraintDescription "must be a valid EC2 instance type."
+  end
   MasterInstanceType do
     Description "Master EC2 instance type"
     Type "String"
@@ -40,9 +53,50 @@ Parameters do
 end
 Mappings do
   _include 'include/map_ami_hvm.rb'
-  _include 'include/map_az_all.rb'
 end
 Resources do
+  AmimotoFrontRole do
+    Type "AWS::IAM::Role"
+    Properties do
+      AssumeRolePolicyDocument do
+        Statement [
+          _{
+            Effect "Allow"
+            Principal do
+              Service ["ec2.amazonaws.com"]
+            end
+            Action ["sts:AssumeRole"]
+          }
+        ]
+      end
+      Path "/"
+      Policies [
+        _{
+          PolicyName "AmazonEC2ReadOnlyAccess"
+          PolicyDocument do
+            Statement [
+              _{
+                Effect "Allow"
+                Action "ec2:Describe*"
+                Resource "*"
+              }
+            ]
+          end
+        }
+      ]
+    end
+  end
+  AmimotoFrontRoleInstanceProfile do
+    Type "AWS::IAM::InstanceProfile"
+    Properties do
+      Path "/"
+      Roles [
+        _{
+          Ref "AmimotoFrontRole"
+        }
+      ]
+    end
+  end
   AmimotoVPC do
     Type "AWS::EC2::VPC"
     Properties do
@@ -105,7 +159,7 @@ Resources do
       ]
     end
   end
-  AmimotoWithRDSSubnet do
+  AmimotoWithRDSNFSSubnet do
     Type "AWS::EC2::Subnet"
     Properties do
       VpcId do
@@ -251,11 +305,11 @@ Resources do
       end
     end
   end
-  SubnetRouteTableAssociation do
+  SubnetRouteTableAssociationNFS do
     Type "AWS::EC2::SubnetRouteTableAssociation"
     Properties do
       SubnetId do
-        Ref "AmimotoWithRDSSubnet"
+        Ref "AmimotoWithRDSNFSSubnet"
       end
       RouteTableId do
         Ref "AmimotoRouteTable"
@@ -302,14 +356,135 @@ Resources do
       ]
     end
   end
-  AmimotoWithRDS do
+  AmimotoFrontSG do
+    Type "AWS::AutoScaling::AutoScalingGroup"
+    Properties do
+      AvailabilityZones do
+        Fn__GetAZs do
+          Ref "AWS::Region"
+        end
+      end
+      VPCZoneIdentifier [
+        _{
+          Ref "AmimotoFrontSubnet1"
+        },
+        _{
+          Ref "AmimotoFrontSubnet2"
+        }
+      ]
+      LaunchConfigurationName do
+        Ref "AmimotoFrontLC"
+      end
+      LoadBalancerNames [
+        _{
+          Ref "LoadBalancer"
+        }
+      ]
+      HealthCheckGracePeriod 300
+      MaxSize 10
+      MinSize 3
+      Tags [
+        _{
+          Key "Name"
+          Value "mp-amimoto-ac-front"
+          PropagateAtLaunch "true"
+        }
+      ]
+    end
+  end
+  AmimotoFrontSP do
+    Type "AWS::AutoScaling::ScalingPolicy"
+    Properties do
+      AdjustmentType "ChangeInCapacity"
+      AutoScalingGroupName do
+        Ref "AmimotoFrontSG"
+      end
+      Cooldown 180
+      ScalingAdjustment 1
+    end
+  end
+  AmimotoFrontLC do
+    Type "AWS::AutoScaling::LaunchConfiguration"
+    Metadata do
+      AWS__CloudFormation__Init do
+        config do
+          files do
+            _path("/opt/aws/cloud_formation.json") do
+              source "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds_nfs.json.template"
+              context do
+                endpoint do
+                  Fn__GetAtt "AmimotoRDS", "Endpoint.Address"
+                end
+                password do
+                  Ref "MySQLPassword"
+                end
+                serverid do
+                  Ref "AmimotoWithRDSNFS"
+                end
+              end
+              mode "00644"
+              owner "root"
+              group "root"
+            end
+          end
+        end
+      end
+    end
+    Properties do
+      AssociatePublicIpAddress "true"
+      ImageId do
+        Fn__FindInMap [
+          "MPAmimotov4",
+          _{
+            Ref "AWS::Region"
+          },
+          "AMI"
+        ]
+      end
+      InstanceType do
+        Ref "InstanceType"
+      end
+      IamInstanceProfile do
+        Ref "AmimotoFrontRoleInstanceProfile"
+      end
+      KeyName do
+        Ref "KeyName"
+      end
+      SecurityGroups [
+        _{
+          Ref "sgAMIMOTO11AutogenByAWSMP"
+        }
+      ]
+      UserData do
+        Fn__Base64 do
+          Fn__Join [
+            "",
+            [
+              "#!/bin/bash\n",
+              "/opt/aws/bin/cfn-init -s ",
+              _{
+                Ref "AWS::StackName"
+              },
+              " -r AmimotoFrontLC ",
+              " --region ",
+              _{
+                Ref "AWS::Region"
+              },
+              "\n"
+            ]
+          ]
+        end
+      end
+    end
+  end
+  AmimotoWithRDSNFS do
     Type "AWS::EC2::Instance"
     Metadata do
       AWS__CloudFormation__Init do
         config do
           files do
             _path("/opt/aws/cloud_formation.json") do
-              source "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds.json.template"
+              source "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds_nfs.json.template"
               context do
                 endpoint do
                   Fn__GetAtt "AmimotoRDS", "Endpoint.Address"
@@ -350,11 +525,11 @@ Resources do
           DeviceIndex 0
           AssociatePublicIpAddress "true"
           SubnetId do
-            Ref "AmimotoWithRDSSubnet"
+            Ref "AmimotoWithRDSNFSSubnet"
           end
           GroupSet [
             _{
-              Ref "sgAMIMOTO11AutogenByAWSMP"
+              Ref "sgAMIMOTO11AutogenByAWSMPNFS"
             }
           ]
         }
@@ -369,7 +544,7 @@ Resources do
               _{
                 Ref "AWS::StackName"
               },
-              " -r AmimotoWithRDS ",
+              " -r AmimotoFrontLC ",
               " --region ",
               _{
                 Ref "AWS::Region"
@@ -486,6 +661,45 @@ Resources do
       ]
     end
   end
+  sgAMIMOTO11AutogenByAWSMPNFS do
+    Type "AWS::EC2::SecurityGroup"
+    Properties do
+      GroupDescription "This security group was generated by AWS Marketplace and is based on recommended settings for AMIMOTO version 11 provided by DigitalCube Co Ltd"
+      VpcId do
+        Ref "AmimotoVPC"
+      end
+      SecurityGroupIngress [
+        _{
+          IpProtocol "tcp"
+          FromPort 22
+          ToPort 22
+          CidrIp "0.0.0.0/0"
+        },
+        _{
+          IpProtocol "tcp"
+          FromPort 80
+          ToPort 80
+          CidrIp "0.0.0.0/0"
+        },
+        _{
+          IpProtocol "tcp"
+          FromPort 0
+          ToPort 65535
+          SourceSecurityGroupId do
+            Ref "sgAMIMOTO11AutogenByAWSMP"
+          end
+        },
+        _{
+          IpProtocol "udp"
+          FromPort 0
+          ToPort 65535
+          SourceSecurityGroupId do
+            Ref "sgAMIMOTO11AutogenByAWSMP"
+          end
+        }
+      ]
+    end
+  end
   sgAMIMOTO11AutogenByAWSMPforRDB do
     Type "AWS::EC2::SecurityGroup"
     Properties do
@@ -507,7 +721,7 @@ Resources do
           FromPort 3306
           ToPort 3306
           SourceSecurityGroupId do
-            Ref "sgAMIMOTO11AutogenByAWSMP"
+            Ref "sgAMIMOTO11AutogenByAWSMPNFS"
           end
         }
       ]
@@ -534,6 +748,12 @@ Outputs do
     Description "Endpoint of RDS"
     Value do
       Fn__GetAtt "AmimotoRDS", "Endpoint.Address"
+    end
+  end
+  InstanceIDforConfirmation do
+    Description "Instance ID for confirmation."
+    Value do
+      Ref "AmimotoWithRDSNFS"
     end
   end
 end
