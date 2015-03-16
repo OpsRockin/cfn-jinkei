@@ -369,7 +369,7 @@ Resources do
               _{
                 Ref "AWS::StackName"
               },
-              " -r AmimotoFrontLC ",
+              " -r AmimotoWithRDS ",
               " --region ",
               _{
                 Ref "AWS::Region"
