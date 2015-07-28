@@ -399,7 +399,6 @@
           "config": {
             "files": {
               "/opt/aws/cloud_formation.json": {
-                "source": "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds.json.template",
                 "content": "{\n                \"rds\" : {\n                  \"database\" : \"wordpress\",\n                  \"username\" : \"amimoto\",\n                  \"password\" : \"{{password}}\",\n                  \"endpoint\" : \"{{endpoint}}\",\n                  \"port\"     : 3306\n                }\n              }",
                 "context": {
                   "endpoint": {

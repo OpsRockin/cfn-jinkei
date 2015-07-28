@@ -600,7 +600,6 @@
           "config": {
             "files": {
               "/opt/aws/cloud_formation.json": {
-                "source": "https://s3-ap-northeast-1.amazonaws.com/cf-amimoto-templates/cfn_file_templates/rds_nfs.json.template",
                 "context": {
                   "endpoint": {
                     "Fn::GetAtt": [
