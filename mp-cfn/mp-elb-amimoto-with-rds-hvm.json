@@ -632,10 +632,7 @@
     "InstanceIDforConfirmation": {
       "Description": "Instance Id for confirmation. ",
       "Value": {
-        "Fn::GetAtt": [
-          "AmimotoWithRDS",
-          "Endpoint.Address"
-        ]
+        "Ref": "AmimotoWithRDS"
       }
     }
   }
